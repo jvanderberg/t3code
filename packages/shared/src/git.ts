@@ -59,3 +59,48 @@ export function resolveAutoFeatureBranchName(
 
   return `${resolvedBase}-${suffix}`;
 }
+
+const TEMP_WORKTREE_BRANCH_TOKEN_REGEX = /^[0-9a-f]{8}$/;
+const TEMP_WORKTREE_BRANCH_FALLBACK_PREFIX = "sandbox";
+
+export function sanitizeTemporaryWorktreeBranchPrefix(raw: string): string {
+  const sanitized = sanitizeBranchFragment(raw);
+  const firstSegment = sanitized.split("/")[0]?.trim();
+  return firstSegment && firstSegment.length > 0
+    ? firstSegment
+    : TEMP_WORKTREE_BRANCH_FALLBACK_PREFIX;
+}
+
+export function buildTemporaryWorktreeBranchName(input: {
+  readonly prefix: string;
+  readonly token: string;
+}): string {
+  const normalizedToken = input.token.trim().toLowerCase();
+  if (!TEMP_WORKTREE_BRANCH_TOKEN_REGEX.test(normalizedToken)) {
+    throw new Error("Temporary worktree branch tokens must be 8 lowercase hex characters.");
+  }
+  return `${sanitizeTemporaryWorktreeBranchPrefix(input.prefix)}/${normalizedToken}`;
+}
+
+export function parseTemporaryWorktreeBranchName(
+  branch: string,
+): { readonly prefix: string; readonly token: string } | null {
+  const normalized = branch.trim().toLowerCase().replace(/^refs\/heads\//, "");
+  const [prefix = "", token = "", ...rest] = normalized.split("/");
+  if (rest.length > 0 || prefix.length === 0 || !TEMP_WORKTREE_BRANCH_TOKEN_REGEX.test(token)) {
+    return null;
+  }
+  return { prefix, token };
+}
+
+export function buildGeneratedWorktreeBranchName(input: {
+  readonly prefix: string;
+  readonly rawBranchName: string;
+}): string {
+  const normalized = input.rawBranchName.trim().toLowerCase().replace(/^refs\/heads\//, "");
+  const prefix = sanitizeTemporaryWorktreeBranchPrefix(input.prefix);
+  const withoutPrefix = normalized.startsWith(`${prefix}/`)
+    ? normalized.slice(`${prefix}/`.length)
+    : normalized;
+  return `${prefix}/${sanitizeBranchFragment(withoutPrefix)}`;
+}
