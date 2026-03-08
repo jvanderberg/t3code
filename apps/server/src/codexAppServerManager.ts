@@ -182,7 +182,7 @@ export interface CodexThreadSnapshot {
 
 const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
 const CODEX_REQUEST_TIMEOUT_MS = 20_000;
-const CODEX_YOLOBOX_STARTUP_REQUEST_TIMEOUT_MS = 60_000;
+const CODEX_YOLOBOX_STARTUP_REQUEST_TIMEOUT_MS = 120_000;
 
 const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
 const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
@@ -649,6 +649,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         execution.appServer.command === "yolobox"
           ? CODEX_YOLOBOX_STARTUP_REQUEST_TIMEOUT_MS
           : CODEX_REQUEST_TIMEOUT_MS;
+      logger.info("waiting for Codex initialize", {
+        threadId,
+        startupRequestTimeoutMs,
+      });
 
       await this.sendRequest(
         context,
@@ -1139,6 +1143,12 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const raw = chunk.toString();
       const lines = raw.split(/\r?\n/g);
       for (const rawLine of lines) {
+        if (rawLine.trim().length > 0) {
+          logger.warn("codex stderr", {
+            threadId: context.session.threadId,
+            line: rawLine.slice(0, 500),
+          });
+        }
         const classified = classifyCodexStderrLine(rawLine);
         if (!classified) {
           continue;
@@ -1150,6 +1160,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
 
     context.child.on("error", (error) => {
       const message = error.message || "codex app-server process errored.";
+      logger.error("codex child process error", {
+        threadId: context.session.threadId,
+        message,
+      });
       this.updateSession(context, {
         status: "error",
         lastError: message,
@@ -1163,6 +1177,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       }
 
       const message = `codex app-server exited (code=${code ?? "null"}, signal=${signal ?? "null"}).`;
+      logger.warn("codex child process exited", {
+        threadId: context.session.threadId,
+        code: code ?? null,
+        signal: signal ?? null,
+      });
       this.updateSession(context, {
         status: "closed",
         activeTurnId: undefined,
@@ -1178,6 +1197,10 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     try {
       parsed = JSON.parse(line);
     } catch {
+      logger.warn("codex stdout parse error", {
+        threadId: context.session.threadId,
+        line: line.slice(0, 500),
+      });
       this.emitErrorEvent(
         context,
         "protocol/parseError",
@@ -1377,6 +1400,11 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     const result = await new Promise<unknown>((resolve, reject) => {
       const timeout = setTimeout(() => {
         context.pending.delete(String(id));
+        logger.warn("codex request timed out", {
+          threadId: context.session.threadId,
+          method,
+          timeoutMs,
+        });
         reject(new Error(`Timed out waiting for ${method}.`));
       }, timeoutMs);
 
