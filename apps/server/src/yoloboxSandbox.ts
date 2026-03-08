@@ -10,6 +10,9 @@ import {
   readYoloboxInstanceMetadata,
   readYoloboxInstanceMetadataForHostPath,
 } from "./codexAppServerManager.ts";
+import { createLogger } from "./logger";
+
+const logger = createLogger("yolobox");
 
 function runYoloboxCliAndReadStdout(
   args: string[],
@@ -99,6 +102,12 @@ export function createYoloboxThreadSandbox(input: {
   readonly env?: NodeJS.ProcessEnv;
 }): YoloboxCreateThreadSandboxResult {
   const base = readDefaultYoloboxBase(input.env);
+  logger.info("creating yolobox sandbox", {
+    repoUrl: input.repoUrl,
+    baseBranch: input.baseBranch,
+    newBranch: input.newBranch,
+    base,
+  });
   const launchArgs = [
     "launch",
     "--repo",
@@ -122,6 +131,10 @@ export function createYoloboxThreadSandbox(input: {
   const metadata = input.env
     ? readYoloboxInstanceMetadata({ instanceName, env: input.env })
     : readYoloboxInstanceMetadata({ instanceName });
+  logger.info("created yolobox sandbox", {
+    instanceName: metadata.instanceId,
+    checkoutDir: metadata.checkoutDir,
+  });
   return {
     instanceName: metadata.instanceId,
     worktree: {
@@ -137,9 +150,16 @@ export function destroyYoloboxSandboxForPath(
 ): YoloboxDestroySandboxResult {
   const metadata = readYoloboxInstanceMetadataForHostPath(sandboxPath, env);
   if (!metadata) {
+    logger.warn("skipping yolobox destroy because path is not sandbox-backed", {
+      sandboxPath,
+    });
     return { removed: false };
   }
 
+  logger.info("destroying yolobox sandbox", {
+    sandboxPath,
+    instanceName: metadata.instanceId,
+  });
   runYoloboxCli(["destroy", "--name", metadata.instanceId, "--yes"], { env });
   return {
     removed: true,

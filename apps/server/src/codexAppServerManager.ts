@@ -30,8 +30,11 @@ import {
   isCodexCliVersionSupported,
   parseCodexCliVersion,
 } from "./provider/codexCliVersion";
+import { createLogger } from "./logger";
 
 type PendingRequestKey = string;
+
+const logger = createLogger("codex");
 
 interface PendingRequest {
   method: string;
@@ -90,7 +93,7 @@ interface CodexExecutionConfig {
   readonly sessionCwd: string;
   readonly threadStartCwd: string | null;
   readonly appServer: CodexProcessInvocation;
-  readonly versionCheck: CodexProcessInvocation;
+  readonly versionCheck: CodexProcessInvocation | null;
 }
 
 interface YoloboxInstanceMetadata {
@@ -178,7 +181,6 @@ export interface CodexThreadSnapshot {
 }
 
 const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
-const CODEX_YOLOBOX_VERSION_CHECK_TIMEOUT_MS = 90_000;
 
 const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
 const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
@@ -582,7 +584,37 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         updatedAt: now,
       };
 
-      this.assertSupportedCodexCliVersion(execution.versionCheck);
+      logger.info("starting Codex session", {
+        threadId,
+        runtimeMode: input.runtimeMode,
+        sessionCwd: execution.sessionCwd,
+        threadStartCwd: execution.threadStartCwd,
+        appServerCommand: execution.appServer.command,
+        appServerArgs: execution.appServer.args,
+        versionCheckEnabled: execution.versionCheck !== null,
+      });
+
+      if (execution.versionCheck) {
+        logger.info("running Codex version preflight", {
+          threadId,
+          command: execution.versionCheck.command,
+          args: execution.versionCheck.args,
+          cwd: execution.versionCheck.cwd,
+          timeoutMs: execution.versionCheck.timeoutMs ?? CODEX_VERSION_CHECK_TIMEOUT_MS,
+        });
+        this.assertSupportedCodexCliVersion(execution.versionCheck);
+      } else {
+        logger.info("skipping Codex version preflight", {
+          threadId,
+          reason: "yolobox-backed session",
+        });
+      }
+      logger.info("spawning Codex app-server", {
+        threadId,
+        command: execution.appServer.command,
+        args: execution.appServer.args,
+        cwd: execution.appServer.cwd,
+      });
       const child = spawn(execution.appServer.command, execution.appServer.args, {
         cwd: execution.appServer.cwd,
         env: execution.appServer.env,
@@ -1758,15 +1790,7 @@ export function resolveCodexExecutionConfig(input: {
         args: ["app-server"],
         hostCwd: inferredYoloboxInstance.checkoutDir,
       }),
-      versionCheck: buildYoloboxExecInvocation({
-        instanceName: inferredYoloboxInstance.instanceId,
-        guestCwd,
-        guestEnv,
-        command: binaryPath,
-        args: ["--version"],
-        hostCwd: inferredYoloboxInstance.checkoutDir,
-        timeoutMs: CODEX_YOLOBOX_VERSION_CHECK_TIMEOUT_MS,
-      }),
+      versionCheck: null,
     };
   }
   if (!input.executionTarget || input.executionTarget.type === "local") {
@@ -1816,15 +1840,7 @@ export function resolveCodexExecutionConfig(input: {
       args: ["app-server"],
       hostCwd: instance.checkoutDir,
     }),
-    versionCheck: buildYoloboxExecInvocation({
-      instanceName: input.executionTarget.instanceName,
-      guestCwd,
-      guestEnv,
-      command: binaryPath,
-      args: ["--version"],
-      hostCwd: instance.checkoutDir,
-      timeoutMs: CODEX_YOLOBOX_VERSION_CHECK_TIMEOUT_MS,
-    }),
+    versionCheck: null,
   };
 }
 
