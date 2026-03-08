@@ -4,6 +4,7 @@ import {
   getAppModelOptions,
   getSlashModelOptions,
   normalizeCustomModelSlugs,
+  resolveAppCodexProviderOptions,
   resolveAppServiceTier,
   shouldShowFastTierIcon,
   resolveAppModelSelection,
@@ -93,6 +94,45 @@ describe("resolveAppServiceTier", () => {
   it("preserves explicit service tier overrides", () => {
     expect(resolveAppServiceTier("fast")).toBe("fast");
     expect(resolveAppServiceTier("flex")).toBe("flex");
+  });
+});
+
+describe("resolveAppCodexProviderOptions", () => {
+  it("returns local execution by default", () => {
+    expect(
+      resolveAppCodexProviderOptions({
+        codexBinaryPath: "",
+        codexHomePath: "",
+        codexExecutionTarget: "local",
+        codexYoloboxInstanceName: "",
+      }),
+    ).toEqual({
+      codex: {
+        executionTarget: {
+          type: "local",
+        },
+      },
+    });
+  });
+
+  it("returns a yolobox execution target when configured", () => {
+    expect(
+      resolveAppCodexProviderOptions({
+        codexBinaryPath: "codex-preview",
+        codexHomePath: "/workspace/.codex",
+        codexExecutionTarget: "yolobox",
+        codexYoloboxInstanceName: "repo-main",
+      }),
+    ).toEqual({
+      codex: {
+        binaryPath: "codex-preview",
+        homePath: "/workspace/.codex",
+        executionTarget: {
+          type: "yolobox",
+          instanceName: "repo-main",
+        },
+      },
+    });
   });
 });
 

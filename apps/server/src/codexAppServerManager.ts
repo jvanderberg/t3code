@@ -1,6 +1,9 @@
 import { type ChildProcessWithoutNullStreams, spawn, spawnSync } from "node:child_process";
 import { randomUUID } from "node:crypto";
 import { EventEmitter } from "node:events";
+import fs from "node:fs";
+import os from "node:os";
+import path from "node:path";
 import readline from "node:readline";
 
 import {
@@ -74,6 +77,27 @@ interface CodexSessionContext {
   stopping: boolean;
 }
 
+interface CodexProcessInvocation {
+  readonly command: string;
+  readonly args: string[];
+  readonly cwd: string;
+  readonly env: NodeJS.ProcessEnv;
+  readonly shell: boolean;
+}
+
+interface CodexExecutionConfig {
+  readonly sessionCwd: string;
+  readonly threadStartCwd: string | null;
+  readonly appServer: CodexProcessInvocation;
+  readonly versionCheck: CodexProcessInvocation;
+}
+
+interface YoloboxInstanceMetadata {
+  readonly instanceId: string;
+  readonly instanceDir: string;
+  readonly checkoutDir: string;
+}
+
 interface JsonRpcError {
   code?: number;
   message?: string;
@@ -132,6 +156,14 @@ export interface CodexAppServerStartSessionInput {
   readonly resumeCursor?: unknown;
   readonly providerOptions?: ProviderSessionStartInput["providerOptions"];
   readonly runtimeMode: RuntimeMode;
+}
+
+interface ReadCodexProviderOptionsResult {
+  readonly binaryPath?: string;
+  readonly homePath?: string;
+  readonly executionTarget?: NonNullable<
+    NonNullable<ProviderSessionStartInput["providerOptions"]>["codex"]
+  >["executionTarget"];
 }
 
 export interface CodexThreadTurnSnapshot {
@@ -527,35 +559,33 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     let context: CodexSessionContext | undefined;
 
     try {
-      const resolvedCwd = input.cwd ?? process.cwd();
+      const codexOptions = readCodexProviderOptions(input);
+      const execution = resolveCodexExecutionConfig({
+        ...(input.cwd ? { cwd: input.cwd } : {}),
+        ...(codexOptions.binaryPath ? { binaryPath: codexOptions.binaryPath } : {}),
+        ...(codexOptions.homePath ? { homePath: codexOptions.homePath } : {}),
+        ...(codexOptions.executionTarget
+          ? { executionTarget: codexOptions.executionTarget }
+          : {}),
+      });
 
       const session: ProviderSession = {
         provider: "codex",
         status: "connecting",
         runtimeMode: input.runtimeMode,
         model: normalizeCodexModelSlug(input.model),
-        cwd: resolvedCwd,
+        cwd: execution.sessionCwd,
         threadId,
         createdAt: now,
         updatedAt: now,
       };
 
-      const codexOptions = readCodexProviderOptions(input);
-      const codexBinaryPath = codexOptions.binaryPath ?? "codex";
-      const codexHomePath = codexOptions.homePath;
-      this.assertSupportedCodexCliVersion({
-        binaryPath: codexBinaryPath,
-        cwd: resolvedCwd,
-        ...(codexHomePath ? { homePath: codexHomePath } : {}),
-      });
-      const child = spawn(codexBinaryPath, ["app-server"], {
-        cwd: resolvedCwd,
-        env: {
-          ...process.env,
-          ...(codexHomePath ? { CODEX_HOME: codexHomePath } : {}),
-        },
+      this.assertSupportedCodexCliVersion(execution.versionCheck);
+      const child = spawn(execution.appServer.command, execution.appServer.args, {
+        cwd: execution.appServer.cwd,
+        env: execution.appServer.env,
         stdio: ["pipe", "pipe", "pipe"],
-        shell: process.platform === "win32",
+        shell: execution.appServer.shell,
       });
       const output = readline.createInterface({ input: child.stdout });
 
@@ -609,7 +639,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       const sessionOverrides = {
         model: normalizedModel ?? null,
         ...(input.serviceTier !== undefined ? { serviceTier: input.serviceTier } : {}),
-        cwd: input.cwd ?? null,
+        cwd: execution.threadStartCwd,
         ...mapCodexRuntimeMode(input.runtimeMode ?? "full-access"),
       };
 
@@ -629,7 +659,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
         threadId,
         requestedRuntimeMode: input.runtimeMode,
         requestedModel: normalizedModel ?? null,
-        requestedCwd: resolvedCwd,
+        requestedCwd: execution.threadStartCwd,
         resumeThreadId: resumeThreadId ?? null,
       }).pipe(this.runPromise);
 
@@ -1333,11 +1363,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     this.emit("event", event);
   }
 
-  private assertSupportedCodexCliVersion(input: {
-    readonly binaryPath: string;
-    readonly cwd: string;
-    readonly homePath?: string;
-  }): void {
+  private assertSupportedCodexCliVersion(input: CodexProcessInvocation): void {
     assertSupportedCodexCliVersion(input);
   }
 
@@ -1510,6 +1536,9 @@ function normalizeProviderThreadId(value: string | undefined): string | undefine
 function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
   readonly binaryPath?: string;
   readonly homePath?: string;
+  readonly executionTarget?: NonNullable<
+    NonNullable<ProviderSessionStartInput["providerOptions"]>["codex"]
+  >["executionTarget"];
 } {
   const options = input.providerOptions?.codex;
   if (!options) {
@@ -1518,22 +1547,212 @@ function readCodexProviderOptions(input: CodexAppServerStartSessionInput): {
   return {
     ...(options.binaryPath ? { binaryPath: options.binaryPath } : {}),
     ...(options.homePath ? { homePath: options.homePath } : {}),
+    ...(options.executionTarget ? { executionTarget: options.executionTarget } : {}),
   };
 }
 
-function assertSupportedCodexCliVersion(input: {
-  readonly binaryPath: string;
-  readonly cwd: string;
-  readonly homePath?: string;
-}): void {
-  const result = spawnSync(input.binaryPath, ["--version"], {
-    cwd: input.cwd,
-    env: {
-      ...process.env,
-      ...(input.homePath ? { CODEX_HOME: input.homePath } : {}),
-    },
-    encoding: "utf8",
+function parseEnvFile(contents: string): Record<string, string> {
+  const entries = contents
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0)
+    .flatMap((line) => {
+      const separatorIndex = line.indexOf("=");
+      if (separatorIndex <= 0) {
+        return [];
+      }
+      const key = line.slice(0, separatorIndex).trim();
+      const value = line.slice(separatorIndex + 1);
+      return key.length > 0 ? [[key, value] as const] : [];
+    });
+  return Object.fromEntries(entries);
+}
+
+export function slugifyYoloboxInstanceName(value: string): string {
+  let slug = "";
+  let previousDash = false;
+  for (const char of value) {
+    const normalized = /[a-z0-9]/i.test(char) ? char.toLowerCase() : "-";
+    if (normalized === "-") {
+      if (!previousDash) {
+        slug += normalized;
+        previousDash = true;
+      }
+    } else {
+      slug += normalized;
+      previousDash = false;
+    }
+  }
+  return slug.replace(/^-+|-+$/g, "").slice(0, 48);
+}
+
+export function resolveYoloboxHome(env: NodeJS.ProcessEnv = process.env): string {
+  const explicit = env.YOLOBOX_HOME?.trim();
+  if (explicit) {
+    return explicit;
+  }
+
+  const home = env.HOME?.trim() || env.USERPROFILE?.trim() || os.homedir();
+  if (!home) {
+    throw new Error("Cannot resolve yolobox home because HOME is not set.");
+  }
+  return path.join(home, ".local", "state", "yolobox");
+}
+
+export function readYoloboxInstanceMetadata(input: {
+  readonly instanceName: string;
+  readonly env?: NodeJS.ProcessEnv;
+}): YoloboxInstanceMetadata {
+  const instanceId = slugifyYoloboxInstanceName(input.instanceName);
+  if (!instanceId) {
+    throw new Error("Yolobox instance name must contain at least one alphanumeric character.");
+  }
+  const instanceDir = path.join(resolveYoloboxHome(input.env), "instances", instanceId);
+  const metadataPath = path.join(instanceDir, "instance.env");
+  let contents: string;
+  try {
+    contents = fs.readFileSync(metadataPath, "utf8");
+  } catch (error) {
+    const detail = error instanceof Error ? error.message : String(error);
+    throw new Error(
+      `Yolobox instance '${input.instanceName}' was not found at ${metadataPath}. ${detail}`,
+      { cause: error },
+    );
+  }
+
+  const values = parseEnvFile(contents);
+  const checkoutDir = values.checkout_dir?.trim();
+  if (!checkoutDir) {
+    throw new Error(`Yolobox instance '${input.instanceName}' is missing checkout_dir metadata.`);
+  }
+
+  return {
+    instanceId,
+    instanceDir,
+    checkoutDir: path.resolve(checkoutDir),
+  };
+}
+
+export function mapHostPathToYoloboxGuestPath(input: {
+  readonly hostPath: string;
+  readonly checkoutDir: string;
+}): string {
+  const normalizedHostPath = path.resolve(input.hostPath);
+  const normalizedCheckoutDir = path.resolve(input.checkoutDir);
+  const relativePath = path.relative(normalizedCheckoutDir, normalizedHostPath);
+  if (
+    relativePath === ".." ||
+    relativePath.startsWith(`..${path.sep}`) ||
+    path.isAbsolute(relativePath)
+  ) {
+    throw new Error(
+      `Path '${normalizedHostPath}' is outside the selected yolobox checkout '${normalizedCheckoutDir}'.`,
+    );
+  }
+
+  const posixRelative = relativePath.split(path.sep).filter(Boolean).join("/");
+  return posixRelative.length > 0 ? `/workspace/${posixRelative}` : "/workspace";
+}
+
+function buildYoloboxExecInvocation(input: {
+  readonly instanceName: string;
+  readonly guestCwd: string;
+  readonly guestEnv?: ReadonlyArray<{ readonly name: string; readonly value: string }>;
+  readonly command: string;
+  readonly args: readonly string[];
+  readonly hostCwd: string;
+}): CodexProcessInvocation {
+  const invocationArgs = [
+    "exec",
+    "--name",
+    input.instanceName,
+    "--cwd",
+    input.guestCwd,
+  ];
+  for (const envVar of input.guestEnv ?? []) {
+    invocationArgs.push("--env", `${envVar.name}=${envVar.value}`);
+  }
+  invocationArgs.push("--", input.command, ...input.args);
+  return {
+    command: "yolobox",
+    args: invocationArgs,
+    cwd: input.hostCwd,
+    env: { ...process.env },
     shell: process.platform === "win32",
+  };
+}
+
+export function resolveCodexExecutionConfig(input: {
+  readonly cwd?: string;
+  readonly binaryPath?: string;
+  readonly homePath?: string;
+  readonly executionTarget?: ReadCodexProviderOptionsResult["executionTarget"];
+}): CodexExecutionConfig {
+  const binaryPath = input.binaryPath ?? "codex";
+  const homePath = input.homePath;
+  if (!input.executionTarget || input.executionTarget.type === "local") {
+    const sessionCwd = input.cwd ?? process.cwd();
+    const env = {
+      ...process.env,
+      ...(homePath ? { CODEX_HOME: homePath } : {}),
+    };
+    return {
+      sessionCwd,
+      threadStartCwd: input.cwd ?? null,
+      appServer: {
+        command: binaryPath,
+        args: ["app-server"],
+        cwd: sessionCwd,
+        env,
+        shell: process.platform === "win32",
+      },
+      versionCheck: {
+        command: binaryPath,
+        args: ["--version"],
+        cwd: sessionCwd,
+        env,
+        shell: process.platform === "win32",
+      },
+    };
+  }
+
+  const instance = readYoloboxInstanceMetadata({
+    instanceName: input.executionTarget.instanceName,
+  });
+  const sessionCwd = input.cwd ? path.resolve(input.cwd) : instance.checkoutDir;
+  const guestCwd = mapHostPathToYoloboxGuestPath({
+    hostPath: sessionCwd,
+    checkoutDir: instance.checkoutDir,
+  });
+  const guestEnv = homePath ? [{ name: "CODEX_HOME", value: homePath }] : [];
+  return {
+    sessionCwd,
+    threadStartCwd: guestCwd,
+    appServer: buildYoloboxExecInvocation({
+      instanceName: input.executionTarget.instanceName,
+      guestCwd,
+      guestEnv,
+      command: binaryPath,
+      args: ["app-server"],
+      hostCwd: instance.checkoutDir,
+    }),
+    versionCheck: buildYoloboxExecInvocation({
+      instanceName: input.executionTarget.instanceName,
+      guestCwd,
+      guestEnv,
+      command: binaryPath,
+      args: ["--version"],
+      hostCwd: instance.checkoutDir,
+    }),
+  };
+}
+
+function assertSupportedCodexCliVersion(input: CodexProcessInvocation): void {
+  const result = spawnSync(input.command, input.args, {
+    cwd: input.cwd,
+    env: input.env,
+    encoding: "utf8",
+    shell: input.shell,
     stdio: ["ignore", "pipe", "pipe"],
     timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
@@ -1546,7 +1765,7 @@ function assertSupportedCodexCliVersion(input: {
       lower.includes("command not found") ||
       lower.includes("not found")
     ) {
-      throw new Error(`Codex CLI (${input.binaryPath}) is not installed or not executable.`);
+      throw new Error(`Codex CLI (${input.command}) is not installed or not executable.`);
     }
     throw new Error(
       `Failed to execute Codex CLI version check: ${result.error.message || String(result.error)}`,

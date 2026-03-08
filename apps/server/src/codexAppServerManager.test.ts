@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { randomUUID } from "node:crypto";
-import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { ApprovalRequestId, ThreadId } from "@t3tools/contracts";
@@ -12,9 +12,13 @@ import {
   CodexAppServerManager,
   classifyCodexStderrLine,
   isRecoverableThreadResumeError,
+  mapHostPathToYoloboxGuestPath,
   normalizeCodexModelSlug,
   readCodexAccountSnapshot,
+  readYoloboxInstanceMetadata,
+  resolveCodexExecutionConfig,
   resolveCodexModelForAccount,
+  slugifyYoloboxInstanceName,
 } from "./codexAppServerManager";
 
 const asThreadId = (value: string): ThreadId => ThreadId.makeUnsafe(value);
@@ -269,6 +273,119 @@ describe("resolveCodexModelForAccount", () => {
   });
 });
 
+describe("yolobox helpers", () => {
+  it("slugifies yolobox instance names like the CLI", () => {
+    expect(slugifyYoloboxInstanceName("Repo Main")).toBe("repo-main");
+    expect(slugifyYoloboxInstanceName("repo-main")).toBe("repo-main");
+  });
+
+  it("maps host paths inside the checkout to guest /workspace paths", () => {
+    expect(
+      mapHostPathToYoloboxGuestPath({
+        hostPath: "/tmp/yolobox/checkout",
+        checkoutDir: "/tmp/yolobox/checkout",
+      }),
+    ).toBe("/workspace");
+    expect(
+      mapHostPathToYoloboxGuestPath({
+        hostPath: "/tmp/yolobox/checkout/src/server",
+        checkoutDir: "/tmp/yolobox/checkout",
+      }),
+    ).toBe("/workspace/src/server");
+  });
+
+  it("rejects host paths outside the yolobox checkout", () => {
+    expect(() =>
+      mapHostPathToYoloboxGuestPath({
+        hostPath: "/tmp/other-project",
+        checkoutDir: "/tmp/yolobox/checkout",
+      }),
+    ).toThrow("outside the selected yolobox checkout");
+  });
+
+  it("reads yolobox instance metadata from the configured state directory", () => {
+    const yoloboxHome = mkdtempSync(path.join(os.tmpdir(), "t3code-yolobox-home-"));
+    const instanceDir = path.join(yoloboxHome, "instances", "repo-main");
+    try {
+      mkdirSync(instanceDir, { recursive: true });
+      writeFileSync(
+        path.join(instanceDir, "instance.env"),
+        [
+          "id=repo-main",
+          "checkout_dir=/tmp/yolobox/repo-main/checkout",
+          "rootfs_path=/tmp/yolobox/repo-main/vm/branch.img",
+        ].join("\n"),
+        "utf8",
+      );
+      expect(
+        readYoloboxInstanceMetadata({
+          instanceName: "repo main",
+          env: { ...process.env, YOLOBOX_HOME: yoloboxHome },
+        }),
+      ).toMatchObject({
+        instanceId: "repo-main",
+        checkoutDir: "/tmp/yolobox/repo-main/checkout",
+      });
+    } finally {
+      rmSync(yoloboxHome, { recursive: true, force: true });
+    }
+  });
+
+  it("builds yolobox exec invocations for codex app-server", () => {
+    const yoloboxHome = mkdtempSync(path.join(os.tmpdir(), "t3code-yolobox-home-"));
+    const instanceDir = path.join(yoloboxHome, "instances", "repo-main");
+    try {
+      mkdirSync(instanceDir, { recursive: true });
+      writeFileSync(
+        path.join(instanceDir, "instance.env"),
+        "id=repo-main\ncheckout_dir=/tmp/yolobox/repo-main/checkout\n",
+        "utf8",
+      );
+      const previousHome = process.env.YOLOBOX_HOME;
+      process.env.YOLOBOX_HOME = yoloboxHome;
+      try {
+        expect(
+          resolveCodexExecutionConfig({
+            cwd: "/tmp/yolobox/repo-main/checkout/packages/server",
+            binaryPath: "codex-preview",
+            homePath: "/workspace/.codex",
+            executionTarget: {
+              type: "yolobox",
+              instanceName: "repo-main",
+            },
+          }),
+        ).toMatchObject({
+          sessionCwd: "/tmp/yolobox/repo-main/checkout/packages/server",
+          threadStartCwd: "/workspace/packages/server",
+          appServer: {
+            command: "yolobox",
+            args: [
+              "exec",
+              "--name",
+              "repo-main",
+              "--cwd",
+              "/workspace/packages/server",
+              "--env",
+              "CODEX_HOME=/workspace/.codex",
+              "--",
+              "codex-preview",
+              "app-server",
+            ],
+          },
+        });
+      } finally {
+        if (previousHome === undefined) {
+          delete process.env.YOLOBOX_HOME;
+        } else {
+          process.env.YOLOBOX_HOME = previousHome;
+        }
+      }
+    } finally {
+      rmSync(yoloboxHome, { recursive: true, force: true });
+    }
+  });
+});
+
 describe("startSession", () => {
   it("enables Codex experimental api capabilities during initialize", () => {
     expect(buildCodexInitializeParams()).toEqual({
@@ -331,11 +448,7 @@ describe("startSession", () => {
     const versionCheck = vi
       .spyOn(
         manager as unknown as {
-          assertSupportedCodexCliVersion: (input: {
-            binaryPath: string;
-            cwd: string;
-            homePath?: string;
-          }) => void;
+          assertSupportedCodexCliVersion: (input: unknown) => void;
         },
         "assertSupportedCodexCliVersion",
       )

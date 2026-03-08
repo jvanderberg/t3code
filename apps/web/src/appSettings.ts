@@ -1,6 +1,10 @@
 import { useCallback, useSyncExternalStore } from "react";
 import { Option, Schema } from "effect";
-import { type ProviderKind, type ProviderServiceTier } from "@t3tools/contracts";
+import {
+  type ProviderKind,
+  type ProviderServiceTier,
+  type ProviderStartOptions,
+} from "@t3tools/contracts";
 import { getDefaultModel, getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 
 const APP_SETTINGS_STORAGE_KEY = "t3code:app-settings:v1";
@@ -25,6 +29,20 @@ export const APP_SERVICE_TIER_OPTIONS = [
 ] as const;
 export type AppServiceTier = (typeof APP_SERVICE_TIER_OPTIONS)[number]["value"];
 const AppServiceTierSchema = Schema.Literals(["auto", "fast", "flex"]);
+export const APP_CODEX_EXECUTION_TARGET_OPTIONS = [
+  {
+    value: "local",
+    label: "Local host",
+    description: "Run Codex app-server directly on the host machine.",
+  },
+  {
+    value: "yolobox",
+    label: "Yolobox",
+    description: "Run Codex app-server inside a named yolobox instance.",
+  },
+] as const;
+export type AppCodexExecutionTarget = (typeof APP_CODEX_EXECUTION_TARGET_OPTIONS)[number]["value"];
+const AppCodexExecutionTargetSchema = Schema.Literals(["local", "yolobox"]);
 const MODELS_WITH_FAST_SUPPORT = new Set(["gpt-5.4"]);
 const BUILT_IN_MODEL_SLUGS_BY_PROVIDER: Record<ProviderKind, ReadonlySet<string>> = {
   codex: new Set(getModelOptions("codex").map((option) => option.slug)),
@@ -35,6 +53,12 @@ const AppSettingsSchema = Schema.Struct({
     Schema.withConstructorDefault(() => Option.some("")),
   ),
   codexHomePath: Schema.String.check(Schema.isMaxLength(4096)).pipe(
+    Schema.withConstructorDefault(() => Option.some("")),
+  ),
+  codexExecutionTarget: AppCodexExecutionTargetSchema.pipe(
+    Schema.withConstructorDefault(() => Option.some("local")),
+  ),
+  codexYoloboxInstanceName: Schema.String.check(Schema.isMaxLength(256)).pipe(
     Schema.withConstructorDefault(() => Option.some("")),
   ),
   confirmThreadDelete: Schema.Boolean.pipe(Schema.withConstructorDefault(() => Option.some(true))),
@@ -55,6 +79,32 @@ export interface AppModelOption {
 
 export function resolveAppServiceTier(serviceTier: AppServiceTier): ProviderServiceTier | null {
   return serviceTier === "auto" ? null : serviceTier;
+}
+
+export function resolveAppCodexProviderOptions(
+  settings: Pick<
+    AppSettings,
+    "codexBinaryPath" | "codexHomePath" | "codexExecutionTarget" | "codexYoloboxInstanceName"
+  >,
+): ProviderStartOptions | undefined {
+  const binaryPath = settings.codexBinaryPath.trim();
+  const homePath = settings.codexHomePath.trim();
+  const yoloboxInstanceName = settings.codexYoloboxInstanceName.trim();
+  const executionTarget =
+    settings.codexExecutionTarget === "yolobox"
+      ? yoloboxInstanceName
+        ? {
+            type: "yolobox" as const,
+            instanceName: yoloboxInstanceName,
+          }
+        : undefined
+      : { type: "local" as const };
+  const codex = {
+    ...(binaryPath ? { binaryPath } : {}),
+    ...(homePath ? { homePath } : {}),
+    ...(executionTarget ? { executionTarget } : {}),
+  };
+  return Object.keys(codex).length > 0 ? { codex } : undefined;
 }
 
 export function shouldShowFastTierIcon(

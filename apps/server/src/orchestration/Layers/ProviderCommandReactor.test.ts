@@ -344,6 +344,49 @@ describe("ProviderCommandReactor", () => {
     });
   });
 
+  it("forwards codex provider options through session start", async () => {
+    const harness = await createHarness();
+    const now = new Date().toISOString();
+
+    await Effect.runPromise(
+      harness.engine.dispatch({
+        type: "thread.turn.start",
+        commandId: CommandId.makeUnsafe("cmd-turn-start-yolobox"),
+        threadId: ThreadId.makeUnsafe("thread-1"),
+        message: {
+          messageId: asMessageId("user-message-yolobox"),
+          role: "user",
+          text: "hello in yolobox",
+          attachments: [],
+        },
+        provider: "codex",
+        providerOptions: {
+          codex: {
+            executionTarget: {
+              type: "yolobox",
+              instanceName: "repo-main",
+            },
+          },
+        },
+        interactionMode: DEFAULT_PROVIDER_INTERACTION_MODE,
+        runtimeMode: "approval-required",
+        createdAt: now,
+      }),
+    );
+
+    await waitFor(() => harness.startSession.mock.calls.length === 1);
+    expect(harness.startSession.mock.calls[0]?.[1]).toMatchObject({
+      providerOptions: {
+        codex: {
+          executionTarget: {
+            type: "yolobox",
+            instanceName: "repo-main",
+          },
+        },
+      },
+    });
+  });
+
   it("forwards plan interaction mode to the provider turn request", async () => {
     const harness = await createHarness();
     const now = new Date().toISOString();

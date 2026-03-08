@@ -200,6 +200,7 @@ import { newCommandId, newMessageId, newThreadId } from "~/lib/utils";
 import { readNativeApi } from "~/nativeApi";
 import {
   getAppModelOptions,
+  resolveAppCodexProviderOptions,
   resolveAppModelSelection,
   resolveAppServiceTier,
   shouldShowFastTierIcon,
@@ -830,6 +831,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
     };
     return Object.keys(codexOptions).length > 0 ? { codex: codexOptions } : undefined;
   }, [selectedCodexFastModeEnabled, selectedEffort, selectedProvider, supportsReasoningEffort]);
+  const selectedProviderOptions = useMemo(
+    () => (selectedProvider === "codex" ? resolveAppCodexProviderOptions(settings) : undefined),
+    [selectedProvider, settings],
+  );
+  const isYoloboxExecutionTarget =
+    selectedProvider === "codex" && settings.codexExecutionTarget === "yolobox";
   const selectedModelForPicker = selectedModel;
   const modelOptionsByProvider = useMemo(
     () => getCustomModelOptionsByProvider(settings),
@@ -2435,6 +2442,20 @@ export default function ChatView({ threadId }: ChatViewProps) {
     if (!activeProject) return;
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
+    if (isYoloboxExecutionTarget && !settings.codexYoloboxInstanceName.trim()) {
+      setStoreThreadError(threadIdForSend, "Enter a yolobox instance name before sending.");
+      return;
+    }
+    if (
+      isYoloboxExecutionTarget &&
+      (activeThread.worktreePath !== null || (isFirstMessage && envMode === "worktree"))
+    ) {
+      setStoreThreadError(
+        threadIdForSend,
+        "Yolobox-backed Codex sessions do not support T3 Code worktrees. Use Local mode for this thread.",
+      );
+      return;
+    }
     const baseBranchForWorktree =
       isFirstMessage && envMode === "worktree" && !activeThread.worktreePath
         ? activeThread.branch
@@ -2626,6 +2647,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
         ...(selectedModelOptionsForDispatch
           ? { modelOptions: selectedModelOptionsForDispatch }
           : {}),
+        ...(selectedProviderOptions ? { providerOptions: selectedProviderOptions } : {}),
         provider: selectedProvider,
         assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
         runtimeMode,
@@ -2903,6 +2925,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           ...(selectedModelOptionsForDispatch
             ? { modelOptions: selectedModelOptionsForDispatch }
             : {}),
+          ...(selectedProviderOptions ? { providerOptions: selectedProviderOptions } : {}),
           assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
           runtimeMode,
           interactionMode: nextInteractionMode,
@@ -2936,6 +2959,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
       selectedProvider,
       setComposerDraftInteractionMode,
       setThreadError,
+      selectedProviderOptions,
       settings.enableAssistantStreaming,
     ],
   );
@@ -2952,6 +2976,23 @@ export default function ChatView({ threadId }: ChatViewProps) {
       isConnecting ||
       sendInFlightRef.current
     ) {
+      return;
+    }
+    if (isYoloboxExecutionTarget && !settings.codexYoloboxInstanceName.trim()) {
+      toastManager.add({
+        type: "error",
+        title: "Missing yolobox instance",
+        description: "Enter a yolobox instance name before starting an implementation thread.",
+      });
+      return;
+    }
+    if (isYoloboxExecutionTarget && activeThread.worktreePath !== null) {
+      toastManager.add({
+        type: "error",
+        title: "Worktrees are not supported",
+        description:
+          "Yolobox-backed Codex sessions do not support T3 Code worktrees for new implementation threads.",
+      });
       return;
     }
 
@@ -3003,6 +3044,7 @@ export default function ChatView({ threadId }: ChatViewProps) {
           ...(selectedModelOptionsForDispatch
             ? { modelOptions: selectedModelOptionsForDispatch }
             : {}),
+          ...(selectedProviderOptions ? { providerOptions: selectedProviderOptions } : {}),
           assistantDeliveryMode: settings.enableAssistantStreaming ? "streaming" : "buffered",
           runtimeMode,
           interactionMode: "default",
@@ -3050,9 +3092,12 @@ export default function ChatView({ threadId }: ChatViewProps) {
     navigate,
     resetSendPhase,
     runtimeMode,
+    isYoloboxExecutionTarget,
     selectedModel,
     selectedModelOptionsForDispatch,
     selectedProvider,
+    selectedProviderOptions,
+    settings.codexYoloboxInstanceName,
     settings.enableAssistantStreaming,
     syncServerReadModel,
   ]);

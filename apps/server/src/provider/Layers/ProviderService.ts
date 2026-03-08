@@ -20,6 +20,7 @@ import {
   ProviderStopSessionInput,
   type ProviderRuntimeEvent,
   type ProviderSession,
+  type ProviderSessionStartInput as ProviderSessionStartInputType,
 } from "@t3tools/contracts";
 import { Effect, Layer, Option, PubSub, Queue, Schema, SchemaIssue, Stream } from "effect";
 
@@ -107,6 +108,76 @@ function readPersistedCwd(
   return trimmed.length > 0 ? trimmed : undefined;
 }
 
+function readPersistedProviderOptions(
+  runtimePayload: ProviderRuntimeBinding["runtimePayload"],
+): ProviderSessionStartInputType["providerOptions"] | undefined {
+  if (!runtimePayload || typeof runtimePayload !== "object" || Array.isArray(runtimePayload)) {
+    return undefined;
+  }
+
+  const rawProviderOptions =
+    "providerOptions" in runtimePayload
+      ? (runtimePayload as Record<string, unknown>).providerOptions
+      : undefined;
+  if (!rawProviderOptions || typeof rawProviderOptions !== "object" || Array.isArray(rawProviderOptions)) {
+    return undefined;
+  }
+
+  const rawCodex =
+    "codex" in rawProviderOptions
+      ? (rawProviderOptions as Record<string, unknown>).codex
+      : undefined;
+  if (!rawCodex || typeof rawCodex !== "object" || Array.isArray(rawCodex)) {
+    return undefined;
+  }
+  const codexOptions = rawCodex as Record<string, unknown>;
+
+  const binaryPath =
+    typeof codexOptions.binaryPath === "string"
+      ? codexOptions.binaryPath.trim()
+      : "";
+  const homePath =
+    typeof codexOptions.homePath === "string"
+      ? codexOptions.homePath.trim()
+      : "";
+  const rawExecutionTarget =
+    "executionTarget" in codexOptions
+      ? codexOptions.executionTarget
+      : undefined;
+  let executionTarget:
+    | NonNullable<NonNullable<ProviderSessionStartInputType["providerOptions"]>["codex"]>["executionTarget"]
+    | undefined;
+  if (
+    rawExecutionTarget &&
+    typeof rawExecutionTarget === "object" &&
+    !Array.isArray(rawExecutionTarget)
+  ) {
+    const executionTargetOptions = rawExecutionTarget as Record<string, unknown>;
+    const type =
+      typeof executionTargetOptions.type === "string"
+        ? executionTargetOptions.type
+        : undefined;
+    if (type === "local") {
+      executionTarget = { type: "local" };
+    } else if (type === "yolobox") {
+      const instanceName =
+        typeof executionTargetOptions.instanceName === "string"
+          ? executionTargetOptions.instanceName.trim()
+          : "";
+      if (instanceName.length > 0) {
+        executionTarget = { type: "yolobox", instanceName };
+      }
+    }
+  }
+
+  const codex = {
+    ...(binaryPath.length > 0 ? { binaryPath } : {}),
+    ...(homePath.length > 0 ? { homePath } : {}),
+    ...(executionTarget ? { executionTarget } : {}),
+  };
+  return Object.keys(codex).length > 0 ? { codex } : undefined;
+}
+
 const makeProviderService = (options?: ProviderServiceLiveOptions) =>
   Effect.gen(function* () {
     const analytics = yield* Effect.service(AnalyticsService);
@@ -137,6 +208,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
     const upsertSessionBinding = (
       session: ProviderSession,
       threadId: ThreadId,
+      providerOptions?: ProviderSessionStartInputType["providerOptions"],
     ) =>
       directory.upsert({
         threadId,
@@ -144,7 +216,10 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         runtimeMode: session.runtimeMode,
         status: toRuntimeStatus(session),
         ...(session.resumeCursor !== undefined ? { resumeCursor: session.resumeCursor } : {}),
-        runtimePayload: toRuntimePayloadFromSession(session),
+        runtimePayload: {
+          ...toRuntimePayloadFromSession(session),
+          ...(providerOptions !== undefined ? { providerOptions } : {}),
+        },
       });
 
     const providers = yield* registry.listProviders();
@@ -179,7 +254,11 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           const activeSessions = yield* adapter.listSessions();
           const existing = activeSessions.find((session) => session.threadId === input.binding.threadId);
           if (existing) {
-            yield* upsertSessionBinding(existing, input.binding.threadId);
+            yield* upsertSessionBinding(
+              existing,
+              input.binding.threadId,
+              readPersistedProviderOptions(input.binding.runtimePayload),
+            );
             yield* analytics.record("provider.session.recovered", {
               provider: existing.provider,
               strategy: "adopt-existing",
@@ -197,11 +276,13 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
         }
 
         const persistedCwd = readPersistedCwd(input.binding.runtimePayload);
+        const persistedProviderOptions = readPersistedProviderOptions(input.binding.runtimePayload);
 
         const resumed = yield* adapter.startSession({
           threadId: input.binding.threadId,
           provider: input.binding.provider,
           ...(persistedCwd ? { cwd: persistedCwd } : {}),
+          ...(persistedProviderOptions ? { providerOptions: persistedProviderOptions } : {}),
           ...(hasResumeCursor ? { resumeCursor: input.binding.resumeCursor } : {}),
           runtimeMode: input.binding.runtimeMode ?? "full-access",
         });
@@ -212,7 +293,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           );
         }
 
-        yield* upsertSessionBinding(resumed, input.binding.threadId);
+        yield* upsertSessionBinding(resumed, input.binding.threadId, persistedProviderOptions);
         yield* analytics.record("provider.session.recovered", {
           provider: resumed.provider,
           strategy: "resume-thread",
@@ -273,7 +354,7 @@ const makeProviderService = (options?: ProviderServiceLiveOptions) =>
           );
         }
 
-        yield* upsertSessionBinding(session, threadId);
+        yield* upsertSessionBinding(session, threadId, input.providerOptions);
         yield* analytics.record("provider.session.started", {
           provider: session.provider,
           runtimeMode: input.runtimeMode,

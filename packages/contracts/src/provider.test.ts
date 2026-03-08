@@ -24,6 +24,10 @@ describe("ProviderSessionStartInput", () => {
         codex: {
           binaryPath: "/usr/local/bin/codex",
           homePath: "/tmp/.codex",
+          executionTarget: {
+            type: "yolobox",
+            instanceName: "repo-main",
+          },
         },
       },
     });
@@ -32,6 +36,10 @@ describe("ProviderSessionStartInput", () => {
     expect(parsed.modelOptions?.codex?.fastMode).toBe(true);
     expect(parsed.providerOptions?.codex?.binaryPath).toBe("/usr/local/bin/codex");
     expect(parsed.providerOptions?.codex?.homePath).toBe("/tmp/.codex");
+    expect(parsed.providerOptions?.codex?.executionTarget).toEqual({
+      type: "yolobox",
+      instanceName: "repo-main",
+    });
   });
 
   it("rejects payloads without runtime mode", () => {
