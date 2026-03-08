@@ -83,6 +83,7 @@ interface CodexProcessInvocation {
   readonly cwd: string;
   readonly env: NodeJS.ProcessEnv;
   readonly shell: boolean;
+  readonly timeoutMs?: number;
 }
 
 interface CodexExecutionConfig {
@@ -177,6 +178,7 @@ export interface CodexThreadSnapshot {
 }
 
 const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
+const CODEX_YOLOBOX_VERSION_CHECK_TIMEOUT_MS = 90_000;
 
 const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
 const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
@@ -1703,6 +1705,7 @@ function buildYoloboxExecInvocation(input: {
   readonly command: string;
   readonly args: readonly string[];
   readonly hostCwd: string;
+  readonly timeoutMs?: number;
 }): CodexProcessInvocation {
   const invocationArgs = [
     "exec",
@@ -1721,6 +1724,7 @@ function buildYoloboxExecInvocation(input: {
     cwd: input.hostCwd,
     env: { ...process.env },
     shell: process.platform === "win32",
+    ...(input.timeoutMs === undefined ? {} : { timeoutMs: input.timeoutMs }),
   };
 }
 
@@ -1761,6 +1765,7 @@ export function resolveCodexExecutionConfig(input: {
         command: binaryPath,
         args: ["--version"],
         hostCwd: inferredYoloboxInstance.checkoutDir,
+        timeoutMs: CODEX_YOLOBOX_VERSION_CHECK_TIMEOUT_MS,
       }),
     };
   }
@@ -1786,6 +1791,7 @@ export function resolveCodexExecutionConfig(input: {
         cwd: sessionCwd,
         env,
         shell: process.platform === "win32",
+        timeoutMs: CODEX_VERSION_CHECK_TIMEOUT_MS,
       },
     };
   }
@@ -1817,6 +1823,7 @@ export function resolveCodexExecutionConfig(input: {
       command: binaryPath,
       args: ["--version"],
       hostCwd: instance.checkoutDir,
+      timeoutMs: CODEX_YOLOBOX_VERSION_CHECK_TIMEOUT_MS,
     }),
   };
 }
@@ -1828,7 +1835,7 @@ function assertSupportedCodexCliVersion(input: CodexProcessInvocation): void {
     encoding: "utf8",
     shell: input.shell,
     stdio: ["ignore", "pipe", "pipe"],
-    timeout: CODEX_VERSION_CHECK_TIMEOUT_MS,
+    timeout: input.timeoutMs ?? CODEX_VERSION_CHECK_TIMEOUT_MS,
     maxBuffer: 1024 * 1024,
   });
 
