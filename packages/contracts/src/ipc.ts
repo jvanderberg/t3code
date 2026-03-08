@@ -15,6 +15,12 @@ import type {
   GitStatusResult,
 } from "./git";
 import type {
+  YoloboxCreateThreadSandboxInput,
+  YoloboxCreateThreadSandboxResult,
+  YoloboxDestroySandboxInput,
+  YoloboxDestroySandboxResult,
+} from "./yolobox";
+import type {
   ProjectSearchEntriesInput,
   ProjectSearchEntriesResult,
   ProjectWriteFileInput,
@@ -127,6 +133,12 @@ export interface NativeApi {
     pull: (input: GitPullInput) => Promise<GitPullResult>;
     status: (input: GitStatusInput) => Promise<GitStatusResult>;
     runStackedAction: (input: GitRunStackedActionInput) => Promise<GitRunStackedActionResult>;
+  };
+  yolobox: {
+    createThreadSandbox: (
+      input: YoloboxCreateThreadSandboxInput,
+    ) => Promise<YoloboxCreateThreadSandboxResult>;
+    destroySandbox: (input: YoloboxDestroySandboxInput) => Promise<YoloboxDestroySandboxResult>;
   };
   contextMenu: {
     show: <T extends string>(

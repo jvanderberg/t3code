@@ -20,6 +20,7 @@ import {
   GitRunStackedActionInput,
   GitStatusInput,
 } from "./git";
+import { YoloboxCreateThreadSandboxInput, YoloboxDestroySandboxInput } from "./yolobox";
 import {
   TerminalClearInput,
   TerminalCloseInput,
@@ -55,6 +56,10 @@ export const WS_METHODS = {
   gitCreateBranch: "git.createBranch",
   gitCheckout: "git.checkout",
   gitInit: "git.init",
+
+  // Yolobox methods
+  yoloboxCreateThreadSandbox: "yolobox.createThreadSandbox",
+  yoloboxDestroySandbox: "yolobox.destroySandbox",
 
   // Terminal methods
   terminalOpen: "terminal.open",
@@ -117,6 +122,8 @@ const WebSocketRequestBody = Schema.Union([
   tagRequestBody(WS_METHODS.gitCreateBranch, GitCreateBranchInput),
   tagRequestBody(WS_METHODS.gitCheckout, GitCheckoutInput),
   tagRequestBody(WS_METHODS.gitInit, GitInitInput),
+  tagRequestBody(WS_METHODS.yoloboxCreateThreadSandbox, YoloboxCreateThreadSandboxInput),
+  tagRequestBody(WS_METHODS.yoloboxDestroySandbox, YoloboxDestroySandboxInput),
 
   // Terminal methods
   tagRequestBody(WS_METHODS.terminalOpen, TerminalOpenInput),
@@ -165,6 +172,7 @@ export type WsResponse = typeof WsResponse.Type;
 export const WsWelcomePayload = Schema.Struct({
   cwd: TrimmedNonEmptyString,
   projectName: TrimmedNonEmptyString,
+  hostLocalName: Schema.optional(TrimmedNonEmptyString),
   bootstrapProjectId: Schema.optional(ProjectId),
   bootstrapThreadId: Schema.optional(ThreadId),
 });

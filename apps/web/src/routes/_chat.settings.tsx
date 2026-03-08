@@ -6,7 +6,6 @@ import { getModelOptions, normalizeModelSlug } from "@t3tools/shared/model";
 import { ZapIcon } from "lucide-react";
 
 import {
-  APP_CODEX_EXECUTION_TARGET_OPTIONS,
   APP_SERVICE_TIER_OPTIONS,
   MAX_CUSTOM_MODEL_LENGTH,
   shouldShowFastTierIcon,
@@ -104,8 +103,6 @@ function SettingsRouteView() {
 
   const codexBinaryPath = settings.codexBinaryPath;
   const codexHomePath = settings.codexHomePath;
-  const codexExecutionTarget = settings.codexExecutionTarget;
-  const codexYoloboxInstanceName = settings.codexYoloboxInstanceName;
   const codexServiceTier = settings.codexServiceTier;
   const keybindingsConfigPath = serverConfigQuery.data?.keybindingsConfigPath ?? null;
 
@@ -254,57 +251,6 @@ function SettingsRouteView() {
               </div>
 
               <div className="space-y-4">
-                <label className="block space-y-1">
-                  <span className="text-xs font-medium text-foreground">Execution target</span>
-                  <Select
-                    items={APP_CODEX_EXECUTION_TARGET_OPTIONS.map((option) => ({
-                      label: option.label,
-                      value: option.value,
-                    }))}
-                    value={codexExecutionTarget}
-                    onValueChange={(value) => {
-                      if (!value) return;
-                      updateSettings({ codexExecutionTarget: value });
-                    }}
-                  >
-                    <SelectTrigger>
-                      <SelectValue />
-                    </SelectTrigger>
-                    <SelectPopup alignItemWithTrigger={false}>
-                      {APP_CODEX_EXECUTION_TARGET_OPTIONS.map((option) => (
-                        <SelectItem key={option.value} value={option.value}>
-                          <div className="flex flex-col items-start">
-                            <span>{option.label}</span>
-                            <span className="text-xs text-muted-foreground">
-                              {option.description}
-                            </span>
-                          </div>
-                        </SelectItem>
-                      ))}
-                    </SelectPopup>
-                  </Select>
-                </label>
-
-                {codexExecutionTarget === "yolobox" ? (
-                  <label htmlFor="codex-yolobox-instance" className="block space-y-1">
-                    <span className="text-xs font-medium text-foreground">
-                      Yolobox instance name
-                    </span>
-                    <Input
-                      id="codex-yolobox-instance"
-                      value={codexYoloboxInstanceName}
-                      onChange={(event) =>
-                        updateSettings({ codexYoloboxInstanceName: event.target.value })
-                      }
-                      placeholder="repo-main"
-                      spellCheck={false}
-                    />
-                    <span className="text-xs text-muted-foreground">
-                      Must match the instance id shown by <code>yolobox list</code>.
-                    </span>
-                  </label>
-                ) : null}
-
                 <label htmlFor="codex-binary-path" className="block space-y-1">
                   <span className="text-xs font-medium text-foreground">Codex binary path</span>
                   <Input
@@ -343,8 +289,6 @@ function SettingsRouteView() {
                     variant="outline"
                     onClick={() =>
                       updateSettings({
-                        codexExecutionTarget: defaults.codexExecutionTarget,
-                        codexYoloboxInstanceName: defaults.codexYoloboxInstanceName,
                         codexBinaryPath: defaults.codexBinaryPath,
                         codexHomePath: defaults.codexHomePath,
                       })

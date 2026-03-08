@@ -50,6 +50,7 @@ import {
 import { gitBranchesQueryOptions, gitCreateWorktreeMutationOptions } from "~/lib/gitReactQuery";
 import { projectSearchEntriesQueryOptions } from "~/lib/projectReactQuery";
 import { serverConfigQueryOptions, serverQueryKeys } from "~/lib/serverReactQuery";
+import { yoloboxCreateThreadSandboxMutationOptions } from "~/lib/yoloboxReactQuery";
 
 import { isElectron } from "../env";
 import { parseDiffRouteSearch, stripDiffSearchParams } from "../diffRouteSearch";
@@ -606,6 +607,9 @@ export default function ChatView({ threadId }: ChatViewProps) {
   const { resolvedTheme } = useTheme();
   const queryClient = useQueryClient();
   const createWorktreeMutation = useMutation(gitCreateWorktreeMutationOptions({ queryClient }));
+  const createYoloboxThreadSandboxMutation = useMutation(
+    yoloboxCreateThreadSandboxMutationOptions({ queryClient }),
+  );
   const composerDraft = useComposerThreadDraft(threadId);
   const prompt = composerDraft.prompt;
   const composerImages = composerDraft.images;
@@ -835,8 +839,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
     () => (selectedProvider === "codex" ? resolveAppCodexProviderOptions(settings) : undefined),
     [selectedProvider, settings],
   );
-  const isYoloboxExecutionTarget =
-    selectedProvider === "codex" && settings.codexExecutionTarget === "yolobox";
   const selectedModelForPicker = selectedModel;
   const modelOptionsByProvider = useMemo(
     () => getCustomModelOptionsByProvider(settings),
@@ -2442,20 +2444,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
     if (!activeProject) return;
     const threadIdForSend = activeThread.id;
     const isFirstMessage = !isServerThread || activeThread.messages.length === 0;
-    if (isYoloboxExecutionTarget && !settings.codexYoloboxInstanceName.trim()) {
-      setStoreThreadError(threadIdForSend, "Enter a yolobox instance name before sending.");
-      return;
-    }
-    if (
-      isYoloboxExecutionTarget &&
-      (activeThread.worktreePath !== null || (isFirstMessage && envMode === "worktree"))
-    ) {
-      setStoreThreadError(
-        threadIdForSend,
-        "Yolobox-backed Codex sessions do not support T3 Code worktrees. Use Local mode for this thread.",
-      );
-      return;
-    }
     const baseBranchForWorktree =
       isFirstMessage && envMode === "worktree" && !activeThread.worktreePath
         ? activeThread.branch
@@ -2527,11 +2515,18 @@ export default function ChatView({ threadId }: ChatViewProps) {
       if (baseBranchForWorktree) {
         beginSendPhase("preparing-worktree");
         const newBranch = buildTemporaryWorktreeBranchName();
-        const result = await createWorktreeMutation.mutateAsync({
-          cwd: activeProject.cwd,
-          branch: baseBranchForWorktree,
-          newBranch,
-        });
+        const result =
+          selectedProvider === "codex"
+            ? await createYoloboxThreadSandboxMutation.mutateAsync({
+                cwd: activeProject.cwd,
+                branch: baseBranchForWorktree,
+                newBranch,
+              })
+            : await createWorktreeMutation.mutateAsync({
+                cwd: activeProject.cwd,
+                branch: baseBranchForWorktree,
+                newBranch,
+              });
         nextThreadBranch = result.worktree.branch;
         nextThreadWorktreePath = result.worktree.path;
         if (isServerThread) {
@@ -2978,24 +2973,6 @@ export default function ChatView({ threadId }: ChatViewProps) {
     ) {
       return;
     }
-    if (isYoloboxExecutionTarget && !settings.codexYoloboxInstanceName.trim()) {
-      toastManager.add({
-        type: "error",
-        title: "Missing yolobox instance",
-        description: "Enter a yolobox instance name before starting an implementation thread.",
-      });
-      return;
-    }
-    if (isYoloboxExecutionTarget && activeThread.worktreePath !== null) {
-      toastManager.add({
-        type: "error",
-        title: "Worktrees are not supported",
-        description:
-          "Yolobox-backed Codex sessions do not support T3 Code worktrees for new implementation threads.",
-      });
-      return;
-    }
-
     const createdAt = new Date().toISOString();
     const nextThreadId = newThreadId();
     const planMarkdown = activeProposedPlan.planMarkdown;
@@ -3006,6 +2983,16 @@ export default function ChatView({ threadId }: ChatViewProps) {
       (activeThread.model as ModelSlug) ||
       (activeProject.model as ModelSlug) ||
       DEFAULT_MODEL_BY_PROVIDER.codex;
+    const shouldForkCodexSandbox =
+      selectedProvider === "codex" && activeThread.worktreePath !== null && activeThread.branch !== null;
+    const nextThreadSandbox =
+      shouldForkCodexSandbox
+        ? await createYoloboxThreadSandboxMutation.mutateAsync({
+            cwd: activeProject.cwd,
+            branch: activeThread.branch!,
+            newBranch: buildTemporaryWorktreeBranchName(),
+          })
+        : null;
 
     sendInFlightRef.current = true;
     beginSendPhase("sending-turn");
@@ -3024,8 +3011,8 @@ export default function ChatView({ threadId }: ChatViewProps) {
         model: nextThreadModel,
         runtimeMode,
         interactionMode: "default",
-        branch: activeThread.branch,
-        worktreePath: activeThread.worktreePath,
+        branch: nextThreadSandbox?.worktree.branch ?? activeThread.branch,
+        worktreePath: nextThreadSandbox?.worktree.path ?? activeThread.worktreePath,
         createdAt,
       })
       .then(() =>
@@ -3092,12 +3079,11 @@ export default function ChatView({ threadId }: ChatViewProps) {
     navigate,
     resetSendPhase,
     runtimeMode,
-    isYoloboxExecutionTarget,
     selectedModel,
     selectedModelOptionsForDispatch,
     selectedProvider,
     selectedProviderOptions,
-    settings.codexYoloboxInstanceName,
+    createYoloboxThreadSandboxMutation,
     settings.enableAssistantStreaming,
     syncServerReadModel,
   ]);

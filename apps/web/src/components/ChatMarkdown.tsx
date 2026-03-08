@@ -27,6 +27,11 @@ import { useTheme } from "../hooks/useTheme";
 import { resolveMarkdownFileLinkTarget } from "../markdown-links";
 import { readNativeApi } from "../nativeApi";
 import { preferredTerminalEditor } from "../terminal-links";
+import {
+  isLikelyYoloboxCheckoutPath,
+  rewriteLoopbackUrlForHostLocalName,
+} from "../lib/loopbackUrl";
+import { getServerHostLocalName, onServerWelcome } from "../wsNativeApi";
 
 class CodeHighlightErrorBoundary extends React.Component<
   { fallback: ReactNode; children: ReactNode },
@@ -235,12 +240,19 @@ function SuspenseShikiCodeBlock({
 function ChatMarkdown({ text, cwd, isStreaming = false }: ChatMarkdownProps) {
   const { resolvedTheme } = useTheme();
   const diffThemeName = resolveDiffThemeName(resolvedTheme);
+  const [hostLocalName, setHostLocalName] = useState<string | null>(() => getServerHostLocalName());
+  const shouldRewriteLoopbackLinks = isLikelyYoloboxCheckoutPath(cwd);
+
+  useEffect(() => onServerWelcome((payload) => setHostLocalName(payload.hostLocalName ?? null)), []);
   const markdownComponents = useMemo<Components>(
     () => ({
       a({ node: _node, href, ...props }) {
         const targetPath = resolveMarkdownFileLinkTarget(href, cwd);
         if (!targetPath) {
-          return <a {...props} href={href} target="_blank" rel="noreferrer" />;
+          const rewrittenHref = shouldRewriteLoopbackLinks
+            ? rewriteLoopbackUrlForHostLocalName(href, hostLocalName)
+            : href;
+          return <a {...props} href={rewrittenHref} target="_blank" rel="noreferrer" />;
         }
 
         return (
@@ -282,7 +294,7 @@ function ChatMarkdown({ text, cwd, isStreaming = false }: ChatMarkdownProps) {
         );
       },
     }),
-    [cwd, diffThemeName, isStreaming],
+    [cwd, diffThemeName, hostLocalName, isStreaming, shouldRewriteLoopbackLinks],
   );
 
   return (

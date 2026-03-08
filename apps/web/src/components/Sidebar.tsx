@@ -27,6 +27,7 @@ import { isChatNewLocalShortcut, isChatNewShortcut, shortcutLabelForCommand } fr
 import { type Thread } from "../types";
 import { derivePendingApprovals } from "../session-logic";
 import { gitRemoveWorktreeMutationOptions, gitStatusQueryOptions } from "../lib/gitReactQuery";
+import { yoloboxDestroySandboxMutationOptions } from "../lib/yoloboxReactQuery";
 import { serverConfigQueryOptions } from "../lib/serverReactQuery";
 import { readNativeApi } from "../nativeApi";
 import { type DraftThreadEnvMode, useComposerDraftStore } from "../composerDraftStore";
@@ -289,6 +290,9 @@ export default function Sidebar() {
   });
   const queryClient = useQueryClient();
   const removeWorktreeMutation = useMutation(gitRemoveWorktreeMutationOptions({ queryClient }));
+  const destroyYoloboxSandboxMutation = useMutation(
+    yoloboxDestroySandboxMutationOptions({ queryClient }),
+  );
   const [addingProject, setAddingProject] = useState(false);
   const [newCwd, setNewCwd] = useState("");
   const [isPickingFolder, setIsPickingFolder] = useState(false);
@@ -714,11 +718,16 @@ export default function Sidebar() {
       }
 
       try {
-        await removeWorktreeMutation.mutateAsync({
-          cwd: threadProject.cwd,
+        const destroyedSandbox = await destroyYoloboxSandboxMutation.mutateAsync({
           path: orphanedWorktreePath,
-          force: true,
         });
+        if (!destroyedSandbox.removed) {
+          await removeWorktreeMutation.mutateAsync({
+            cwd: threadProject.cwd,
+            path: orphanedWorktreePath,
+            force: true,
+          });
+        }
       } catch (error) {
         const message = error instanceof Error ? error.message : "Unknown error removing worktree.";
         console.error("Failed to remove orphaned worktree after thread deletion", {
@@ -742,6 +751,7 @@ export default function Sidebar() {
       markThreadUnread,
       navigate,
       projects,
+      destroyYoloboxSandboxMutation,
       removeWorktreeMutation,
       routeThreadId,
       threads,
@@ -824,10 +834,14 @@ export default function Sidebar() {
       if (!isChatNewShortcut(event, keybindings)) return;
       const projectId = activeThread?.projectId ?? activeDraftThread?.projectId ?? projects[0]?.id;
       if (!projectId) return;
+      const shouldForkCodexSandbox =
+        activeThread?.worktreePath !== null && activeThread?.session?.provider === "codex";
       event.preventDefault();
       void handleNewThread(projectId, {
         branch: activeThread?.branch ?? activeDraftThread?.branch ?? null,
-        worktreePath: activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null,
+        worktreePath: shouldForkCodexSandbox
+          ? null
+          : (activeThread?.worktreePath ?? activeDraftThread?.worktreePath ?? null),
         envMode: activeDraftThread?.envMode ?? (activeThread?.worktreePath ? "worktree" : "local"),
       });
     };

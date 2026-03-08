@@ -98,39 +98,25 @@ describe("resolveAppServiceTier", () => {
 });
 
 describe("resolveAppCodexProviderOptions", () => {
-  it("returns local execution by default", () => {
+  it("returns undefined when no overrides are configured", () => {
     expect(
       resolveAppCodexProviderOptions({
         codexBinaryPath: "",
         codexHomePath: "",
-        codexExecutionTarget: "local",
-        codexYoloboxInstanceName: "",
       }),
-    ).toEqual({
-      codex: {
-        executionTarget: {
-          type: "local",
-        },
-      },
-    });
+    ).toBeUndefined();
   });
 
-  it("returns a yolobox execution target when configured", () => {
+  it("returns codex binary and home overrides when configured", () => {
     expect(
       resolveAppCodexProviderOptions({
         codexBinaryPath: "codex-preview",
         codexHomePath: "/workspace/.codex",
-        codexExecutionTarget: "yolobox",
-        codexYoloboxInstanceName: "repo-main",
       }),
     ).toEqual({
       codex: {
         binaryPath: "codex-preview",
         homePath: "/workspace/.codex",
-        executionTarget: {
-          type: "yolobox",
-          instanceName: "repo-main",
-        },
       },
     });
   });

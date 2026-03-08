@@ -1586,6 +1586,21 @@ export function slugifyYoloboxInstanceName(value: string): string {
   return slug.replace(/^-+|-+$/g, "").slice(0, 48);
 }
 
+function repoBasenameForYolobox(repoUrl: string): string {
+  const trimmed = repoUrl.trim().replace(/\/+$/g, "");
+  const basename = trimmed.split(/[/:]/).at(-1) ?? trimmed;
+  return basename.replace(/\.git$/i, "");
+}
+
+export function buildYoloboxRepoBranchInstanceName(repoUrl: string, branch: string): string {
+  const repoSlug = slugifyYoloboxInstanceName(repoBasenameForYolobox(repoUrl));
+  const branchSlug = slugifyYoloboxInstanceName(branch);
+  if (!repoSlug || !branchSlug) {
+    throw new Error("Yolobox repo and branch must contain at least one alphanumeric character.");
+  }
+  return `${repoSlug}-${branchSlug}`;
+}
+
 export function resolveYoloboxHome(env: NodeJS.ProcessEnv = process.env): string {
   const explicit = env.YOLOBOX_HOME?.trim();
   if (explicit) {
@@ -1631,6 +1646,33 @@ export function readYoloboxInstanceMetadata(input: {
     instanceDir,
     checkoutDir: path.resolve(checkoutDir),
   };
+}
+
+export function readYoloboxInstanceMetadataForHostPath(
+  hostPath: string,
+  env: NodeJS.ProcessEnv = process.env,
+): YoloboxInstanceMetadata | null {
+  let current = path.resolve(hostPath);
+  while (true) {
+    if (path.basename(current) === "checkout") {
+      const instanceDir = path.dirname(current);
+      const metadataPath = path.join(instanceDir, "instance.env");
+      if (fs.existsSync(metadataPath)) {
+        const instanceName = path.basename(instanceDir);
+        const metadata = readYoloboxInstanceMetadata({ instanceName, env });
+        const relative = path.relative(metadata.checkoutDir, path.resolve(hostPath));
+        if (relative === "" || (!relative.startsWith("..") && !path.isAbsolute(relative))) {
+          return metadata;
+        }
+      }
+    }
+
+    const parent = path.dirname(current);
+    if (parent === current) {
+      return null;
+    }
+    current = parent;
+  }
 }
 
 export function mapHostPathToYoloboxGuestPath(input: {
@@ -1690,6 +1732,38 @@ export function resolveCodexExecutionConfig(input: {
 }): CodexExecutionConfig {
   const binaryPath = input.binaryPath ?? "codex";
   const homePath = input.homePath;
+  const inferredYoloboxInstance =
+    !input.executionTarget && input.cwd
+      ? readYoloboxInstanceMetadataForHostPath(input.cwd)
+      : null;
+  if (inferredYoloboxInstance) {
+    const sessionCwd = path.resolve(input.cwd ?? inferredYoloboxInstance.checkoutDir);
+    const guestCwd = mapHostPathToYoloboxGuestPath({
+      hostPath: sessionCwd,
+      checkoutDir: inferredYoloboxInstance.checkoutDir,
+    });
+    const guestEnv = homePath ? [{ name: "CODEX_HOME", value: homePath }] : [];
+    return {
+      sessionCwd,
+      threadStartCwd: guestCwd,
+      appServer: buildYoloboxExecInvocation({
+        instanceName: inferredYoloboxInstance.instanceId,
+        guestCwd,
+        guestEnv,
+        command: binaryPath,
+        args: ["app-server"],
+        hostCwd: inferredYoloboxInstance.checkoutDir,
+      }),
+      versionCheck: buildYoloboxExecInvocation({
+        instanceName: inferredYoloboxInstance.instanceId,
+        guestCwd,
+        guestEnv,
+        command: binaryPath,
+        args: ["--version"],
+        hostCwd: inferredYoloboxInstance.checkoutDir,
+      }),
+    };
+  }
   if (!input.executionTarget || input.executionTarget.type === "local") {
     const sessionCwd = input.cwd ?? process.cwd();
     const env = {

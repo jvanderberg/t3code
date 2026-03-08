@@ -59,6 +59,10 @@ export function onServerWelcome(listener: (payload: WsWelcomePayload) => void): 
   };
 }
 
+export function getServerHostLocalName(): string | null {
+  return lastWelcome?.hostLocalName ?? null;
+}
+
 /**
  * Subscribe to server config update events. Replays the latest update for
  * late subscribers to avoid missing config validation feedback.
@@ -170,6 +174,10 @@ export function createWsNativeApi(): NativeApi {
       createBranch: (input) => transport.request(WS_METHODS.gitCreateBranch, input),
       checkout: (input) => transport.request(WS_METHODS.gitCheckout, input),
       init: (input) => transport.request(WS_METHODS.gitInit, input),
+    },
+    yolobox: {
+      createThreadSandbox: (input) => transport.request(WS_METHODS.yoloboxCreateThreadSandbox, input),
+      destroySandbox: (input) => transport.request(WS_METHODS.yoloboxDestroySandbox, input),
     },
     contextMenu: {
       show: async <T extends string>(

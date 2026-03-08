@@ -7,6 +7,7 @@
  * @module Server
  */
 import http from "node:http";
+import os from "node:os";
 import type { Duplex } from "node:stream";
 
 import Mime from "@effect/platform-node/Mime";
@@ -73,6 +74,10 @@ import {
 import { parseBase64DataUrl } from "./imageMime.ts";
 import { AnalyticsService } from "./telemetry/Services/AnalyticsService.ts";
 import { expandHomePath } from "./os-jank.ts";
+import {
+  createYoloboxThreadSandbox,
+  destroyYoloboxSandboxForPath,
+} from "./yoloboxSandbox.ts";
 
 /**
  * ServerShape - Service API for server lifecycle control.
@@ -97,6 +102,11 @@ export interface ServerShape {
  * Server - Service tag for HTTP/WebSocket lifecycle management.
  */
 export class Server extends ServiceMap.Service<Server, ServerShape>()("t3/wsServer/Server") {}
+
+function resolveHostLocalName(): string | null {
+  const hostname = os.hostname().trim().replace(/\.local$/i, "");
+  return hostname.length > 0 ? `${hostname}.local` : null;
+}
 
 const isServerNotRunningError = (error: unknown): boolean => {
   if (!(error instanceof Error)) return false;
@@ -846,6 +856,52 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
         return yield* git.initRepo(body);
       }
 
+      case WS_METHODS.yoloboxCreateThreadSandbox: {
+        const body = stripRequestTag(request.body);
+        const repoUrl = yield* git.readConfigValue(body.cwd, "remote.origin.url").pipe(
+          Effect.mapError(
+            (cause) =>
+              new RouteRequestError({
+                message: `Failed to read remote.origin.url for ${body.cwd}: ${cause.message}`,
+              }),
+          ),
+        );
+        if (!repoUrl) {
+          return yield* new RouteRequestError({
+            message: `Cannot create a yolobox sandbox for ${body.cwd} because remote.origin.url is not configured.`,
+          });
+        }
+        return yield* Effect.try({
+          try: () =>
+            createYoloboxThreadSandbox({
+              repoUrl,
+              baseBranch: body.branch,
+              newBranch: body.newBranch,
+            }),
+          catch: (cause) =>
+            new RouteRequestError({
+              message:
+                cause instanceof Error
+                  ? cause.message
+                  : "Failed to create yolobox sandbox.",
+            }),
+        });
+      }
+
+      case WS_METHODS.yoloboxDestroySandbox: {
+        const body = stripRequestTag(request.body);
+        return yield* Effect.try({
+          try: () => destroyYoloboxSandboxForPath(body.path),
+          catch: (cause) =>
+            new RouteRequestError({
+              message:
+                cause instanceof Error
+                  ? cause.message
+                  : "Failed to destroy yolobox sandbox.",
+            }),
+        });
+      }
+
       case WS_METHODS.terminalOpen: {
         const body = stripRequestTag(request.body);
         return yield* terminalManager.open(body);
@@ -972,6 +1028,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
 
     const segments = cwd.split(/[/\\]/).filter(Boolean);
     const projectName = segments[segments.length - 1] ?? "project";
+    const hostLocalName = resolveHostLocalName();
 
     const welcome: WsPush = {
       type: "push",
@@ -979,6 +1036,7 @@ export const createServer = Effect.fn(function* (): Effect.fn.Return<
       data: {
         cwd,
         projectName,
+        ...(hostLocalName ? { hostLocalName } : {}),
         ...(welcomeBootstrapProjectId ? { bootstrapProjectId: welcomeBootstrapProjectId } : {}),
         ...(welcomeBootstrapThreadId ? { bootstrapThreadId: welcomeBootstrapThreadId } : {}),
       },
