@@ -11,13 +11,13 @@ import {
   readYoloboxInstanceMetadataForHostPath,
 } from "./codexAppServerManager.ts";
 
-function runYoloboxCli(
+function runYoloboxCliAndReadStdout(
   args: string[],
   options?: {
     readonly cwd?: string;
     readonly env?: NodeJS.ProcessEnv;
   },
-): void {
+): string {
   const result = spawnSync("yolobox", args, {
     cwd: options?.cwd ?? process.cwd(),
     env: options?.env ?? process.env,
@@ -43,14 +43,53 @@ function runYoloboxCli(
       result.stderr.trim() || result.stdout.trim() || `yolobox exited with code ${result.status}.`;
     throw new Error(detail);
   }
+
+  return result.stdout ?? "";
+}
+
+function runYoloboxCli(
+  args: string[],
+  options?: {
+    readonly cwd?: string;
+    readonly env?: NodeJS.ProcessEnv;
+  },
+): void {
+  void runYoloboxCliAndReadStdout(args, options);
+}
+
+function listYoloboxBaseNames(env: NodeJS.ProcessEnv = process.env): string[] {
+  const stdout = runYoloboxCliAndReadStdout(["base", "list"], { env });
+  return stdout
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter((line) => line.length > 0 && line.toLowerCase() !== "no base images")
+    .map((line) => line.split(/\s+/)[0] ?? "")
+    .filter((name) => name.length > 0);
 }
 
 function readDefaultYoloboxBase(env: NodeJS.ProcessEnv = process.env): string {
   const value = env.YOLOBOX_DEFAULT_BASE?.trim();
-  if (!value) {
-    throw new Error("Set YOLOBOX_DEFAULT_BASE before creating yolobox-backed worktrees.");
+  const baseNames = listYoloboxBaseNames(env);
+  if (value) {
+    if (baseNames.length === 0 || baseNames.includes(value)) {
+      return value;
+    }
+    throw new Error(
+      `YOLOBOX_DEFAULT_BASE is set to '${value}', but that base image was not found. Available bases: ${baseNames.join(", ")}.`,
+    );
   }
-  return value;
+
+  const preferred =
+    baseNames.find((name) => name === "ubuntu-dev") ??
+    baseNames.find((name) => name === "ubuntu") ??
+    baseNames[0];
+  if (preferred) {
+    return preferred;
+  }
+
+  throw new Error(
+    "No yolobox base images are available. Import one with `yolobox base import` or set YOLOBOX_DEFAULT_BASE.",
+  );
 }
 
 export function createYoloboxThreadSandbox(input: {
