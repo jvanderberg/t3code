@@ -181,6 +181,8 @@ export interface CodexThreadSnapshot {
 }
 
 const CODEX_VERSION_CHECK_TIMEOUT_MS = 4_000;
+const CODEX_REQUEST_TIMEOUT_MS = 20_000;
+const CODEX_YOLOBOX_STARTUP_REQUEST_TIMEOUT_MS = 60_000;
 
 const ANSI_ESCAPE_CHAR = String.fromCharCode(27);
 const ANSI_ESCAPE_REGEX = new RegExp(`${ANSI_ESCAPE_CHAR}\\[[0-9;]*m`, "g");
@@ -643,18 +645,37 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       this.attachProcessListeners(context);
 
       this.emitLifecycleEvent(context, "session/connecting", "Starting codex app-server");
+      const startupRequestTimeoutMs =
+        execution.appServer.command === "yolobox"
+          ? CODEX_YOLOBOX_STARTUP_REQUEST_TIMEOUT_MS
+          : CODEX_REQUEST_TIMEOUT_MS;
 
-      await this.sendRequest(context, "initialize", buildCodexInitializeParams());
+      await this.sendRequest(
+        context,
+        "initialize",
+        buildCodexInitializeParams(),
+        startupRequestTimeoutMs,
+      );
 
       this.writeMessage(context, { method: "initialized" });
       try {
-        const modelListResponse = await this.sendRequest(context, "model/list", {});
+        const modelListResponse = await this.sendRequest(
+          context,
+          "model/list",
+          {},
+          startupRequestTimeoutMs,
+        );
         console.log("codex model/list response", modelListResponse);
       } catch (error) {
         console.log("codex model/list failed", error);
       }
       try {
-        const accountReadResponse = await this.sendRequest(context, "account/read", {});
+        const accountReadResponse = await this.sendRequest(
+          context,
+          "account/read",
+          {},
+          startupRequestTimeoutMs,
+        );
         console.log("codex account/read response", accountReadResponse);
         context.account = readCodexAccountSnapshot(accountReadResponse);
         console.log("codex subscription status", {
@@ -702,10 +723,15 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
       if (resumeThreadId) {
         try {
           threadOpenMethod = "thread/resume";
-          threadOpenResponse = await this.sendRequest(context, "thread/resume", {
-            ...sessionOverrides,
-            threadId: resumeThreadId,
-          });
+          threadOpenResponse = await this.sendRequest(
+            context,
+            "thread/resume",
+            {
+              ...sessionOverrides,
+              threadId: resumeThreadId,
+            },
+            startupRequestTimeoutMs,
+          );
         } catch (error) {
           if (!isRecoverableThreadResumeError(error)) {
             this.emitErrorEvent(
@@ -736,11 +762,21 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
             recoverable: true,
             cause: error instanceof Error ? error.message : String(error),
           }).pipe(this.runPromise);
-          threadOpenResponse = await this.sendRequest(context, "thread/start", threadStartParams);
+          threadOpenResponse = await this.sendRequest(
+            context,
+            "thread/start",
+            threadStartParams,
+            startupRequestTimeoutMs,
+          );
         }
       } else {
         threadOpenMethod = "thread/start";
-        threadOpenResponse = await this.sendRequest(context, "thread/start", threadStartParams);
+        threadOpenResponse = await this.sendRequest(
+          context,
+          "thread/start",
+          threadStartParams,
+          startupRequestTimeoutMs,
+        );
       }
 
       const threadOpenRecord = this.readObject(threadOpenResponse);
@@ -1333,7 +1369,7 @@ export class CodexAppServerManager extends EventEmitter<CodexAppServerManagerEve
     context: CodexSessionContext,
     method: string,
     params: unknown,
-    timeoutMs = 20_000,
+    timeoutMs = CODEX_REQUEST_TIMEOUT_MS,
   ): Promise<TResponse> {
     const id = context.nextRequestId;
     context.nextRequestId += 1;
